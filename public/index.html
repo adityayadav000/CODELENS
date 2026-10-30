@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Makes the page scale on phones -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CodeLens</title>
+
+  <!-- CSS = how things look (colors, spacing). Not required for logic. -->
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+    h1 { margin-bottom: 8px; }
+    .sub { color: #555; margin-bottom: 24px; }
+    textarea { width: 100%; height: 90px; padding: 10px; font-size: 14px; }
+    button { margin-top: 10px; padding: 10px 16px; font-size: 14px; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    #status { margin-top: 12px; color: #555; }
+    #answer { margin-top: 24px; white-space: pre-wrap; background: #f6f6f6; padding: 12px; border-radius: 8px; }
+    .citation { border: 1px solid #ddd; border-radius: 8px; padding: 10px; margin-top: 10px; }
+    .path { font-weight: 600; }
+    .preview { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; margin-top: 6px; }
+  </style>
+</head>
+
+<body>
+  <!-- What the user sees -->
+  <h1>CodeLens</h1>
+  <p class="sub">Ask a question about the indexed codebase. Answers include file/line citations.</p>
+
+  <!-- id= lets JavaScript find this element later -->
+  <textarea id="question" placeholder="e.g. how does this library escape regex special characters?"></textarea>
+  <br />
+  <button id="askBtn">Ask</button>
+
+  <!-- Empty boxes we fill after the API responds -->
+  <div id="status"></div>
+  <div id="answer"></div>
+  <div id="citations"></div>
+
+  <script>
+    // ===== 1. Grab the HTML elements by id =====
+    const questionEl = document.getElementById('question'); //The getElementById() method of the Document interface returns an Element object representing the element whose id property matches the specified string
+    const askBtn = document.getElementById('askBtn');
+    const statusEl = document.getElementById('status');
+    const answerEl = document.getElementById('answer');
+    const citationsEl = document.getElementById('citations');
+
+    // ===== 2. When user clicks Ask, run this function =====
+    askBtn.addEventListener('click', async () => {
+      // Read the text from the textarea
+      const question = questionEl.value.trim();
+
+      // Don't call the API with an empty question
+      if (!question) {
+        statusEl.textContent = 'Type a question first.';
+        return;
+      }
+
+      // Disable button so user doesn't click 10 times while waiting
+      askBtn.disabled = true;
+      statusEl.textContent = 'Searching...';
+      answerEl.textContent = '';
+      citationsEl.innerHTML = ''; // clear old citation cards
+
+      try {
+        // ===== 3. Call YOUR backend API =====
+        // fetch = browser's way to send HTTP requests
+        // POST /ask with JSON body { "question": "..." }
+        const res = await fetch('/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question }),
+        });
+
+        // Turn response body into a JS object
+        const data = await res.json();
+
+        // If server returned an error (400/500)
+               if (!res.ok) {
+          statusEl.textContent = data.error || 'Request failed';
+          return;
+        }
+
+        statusEl.textContent = 'Done';
+        answerEl.textContent = data.answer;
+
+        // Debug: open browser console (F12) and check this
+        console.log('API critic field:', data.critic);
+
+        let criticBox = document.getElementById('critic');
+        if (!criticBox) {
+          criticBox = document.createElement('div');
+          criticBox.id = 'critic';
+          criticBox.style.marginTop = '16px';
+          criticBox.style.padding = '12px';
+          criticBox.style.borderRadius = '8px';
+          criticBox.style.border = '1px solid #ccc';
+          answerEl.insertAdjacentElement('afterend', criticBox);
+        }
+
+        if (data.critic) {
+          const ok = Boolean(data.critic.pass);
+          criticBox.style.background = ok ? '#e8f5e9' : '#fff3e0';
+          criticBox.innerText =
+            'Critic: ' +
+            (ok ? 'PASS' : 'FAIL') +
+            ' — ' +
+            String(data.critic.notes || '');
+        } else {
+          criticBox.innerText = 'Critic: (not in API response)';
+        }
+
+        citationsEl.innerHTML = '';
+        for (const c of data.citations || []) {
+          const div = document.createElement('div');
+          div.className = 'citation';
+          div.innerHTML =
+            `<div class="path">${c.path} (lines ${c.start_line}-${c.end_line})</div>` +
+            `<div>meaning: ${Number(c.meaning_score).toFixed(3)} | keyword: ${Number(c.keyword_score).toFixed(3)}</div>` +
+            `<div class="preview">${c.preview || ''}</div>`;
+          citationsEl.appendChild(div);
+        }
+      } catch (err) {
+        // Network error (server not running, wrong URL, etc.)
+        statusEl.textContent = 'Could not reach the API. Is the server running?';
+      } finally {
+        // Always re-enable the button
+        askBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

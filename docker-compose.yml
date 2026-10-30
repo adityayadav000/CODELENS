@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: codelens-postgres
+    environment:
+      POSTGRES_USER: codelens
+      POSTGRES_PASSWORD: codelens_dev_password
+      POSTGRES_DB: codelens
+    ports:
+      - "5432:5432"
+    volumes:
+      -  postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codelens -d codelens"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: codelens-app
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://codelens:codelens_dev_password@postgres:5432/codelens
+    depends_on:
+      postgres:
+        condition: service_healthy
+       
+volumes:
+  postgres_data:    
