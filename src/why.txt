@@ -1,0 +1,21 @@
+why needed to ti change ingest-repo.ts
+
+
+Before
+
+1.Only way to index:
+npx tsx src/ingest-repo.ts <url> in the terminal
+
+2.Server could only Ask (search + answer). It could not start an ingest.
+
+
+After
+
+1.ingestRepoFromUrl
+Same ingest logic as before, but in a function other code can call.
+ 
+2. POST /index on the server
+Send a URL in JSON → server runs that function → saves code in Postgres.
+
+3.CLI still works
+You can still run the script from the terminal if you want.

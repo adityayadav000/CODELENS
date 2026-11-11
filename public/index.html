@@ -26,7 +26,19 @@
   <!-- What the user sees -->
   <h1>CodeLens</h1>
   <p class="sub">Ask a question about the indexed codebase. Answers include file/line citations.</p>
+    <h2 style="font-size: 1.1rem; margin-top: 24px;">Index a GitHub repo</h2>
+  <input
+    id="repoUrl"
+    type="text"
+    placeholder="https://github.com/owner/repo"
+    style="width: 100%; padding: 10px; font-size: 14px; box-sizing: border-box;"
+  />
+  <button id="indexBtn" type="button">Index repo</button>
+  <div id="indexStatus" style="margin-top: 8px; color: #555;"></div>
 
+  <hr style="margin: 28px 0; border: none; border-top: 1px solid #ddd;" />
+
+  <h2 style="font-size: 1.1rem;">Ask a question</h2>
   <!-- id= lets JavaScript find this element later -->
   <textarea id="question" placeholder="e.g. how does this library escape regex special characters?"></textarea>
   <br />
@@ -44,7 +56,9 @@
     const statusEl = document.getElementById('status');
     const answerEl = document.getElementById('answer');
     const citationsEl = document.getElementById('citations');
-
+    const repoUrlEl = document.getElementById('repoUrl');
+    const indexBtn = document.getElementById('indexBtn');
+    const indexStatusEl = document.getElementById('indexStatus');
     // ===== 2. When user clicks Ask, run this function =====
     askBtn.addEventListener('click', async () => {
       // Read the text from the textarea
@@ -98,14 +112,19 @@
           answerEl.insertAdjacentElement('afterend', criticBox);
         }
 
-        if (data.critic) {
+               if (data.critic) {
           const ok = Boolean(data.critic.pass);
-          criticBox.style.background = ok ? '#e8f5e9' : '#fff3e0';
-          criticBox.innerText =
-            'Critic: ' +
-            (ok ? 'PASS' : 'FAIL') +
-            ' — ' +
-            String(data.critic.notes || '');
+          const attempts = data.attempts || 1;
+          const attemptLabel = attempts > 1 
+            ? ` (Self-corrected on attempt ${attempts}! ⚡)` 
+            : ` (Verified on attempt 1)`;
+
+          criticBox.style.background = ok ? '#e8f5e9' : '#ffebee';
+          criticBox.style.borderColor = ok ? '#81c784' : '#e57373';
+          criticBox.innerHTML = `
+            <strong>Critic: ${ok ? 'PASS' : 'FAIL'}${ok ? attemptLabel : ''}</strong>
+            <p style="margin: 4px 0 0 0; font-size: 13px; color: #444;">${data.critic.notes || ''}</p>
+          `;
         } else {
           criticBox.innerText = 'Critic: (not in API response)';
         }
@@ -128,6 +147,79 @@
         askBtn.disabled = false;
       }
     });
-  </script>
+     indexBtn.addEventListener('click', async () => {
+      const url = repoUrlEl.value.trim();
+      if (!url) {
+        indexStatusEl.textContent = 'Paste a GitHub URL first.';
+        return;
+      }
+
+      indexBtn.disabled = true;
+      indexStatusEl.innerHTML = `
+        <div style="margin-top: 10px;">
+          <div style="background: #e0e0e0; border-radius: 6px; overflow: hidden; height: 16px; width: 100%;">
+            <div id="progressBar" style="background: #1976d2; height: 100%; width: 5%; transition: width 0.3s ease;"></div>
+          </div>
+          <div id="progressText" style="margin-top: 6px; font-size: 13px; color: #444;">Queueing job in Redis...</div>
+        </div>
+      `;
+
+      try {
+        // Step 1: Submit job to Express queue producer
+        const res = await fetch('/index', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          indexStatusEl.textContent = data.error || 'Failed to queue index job';
+          indexBtn.disabled = false;
+          return;
+        }
+
+        const jobId = data.jobId;
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+
+        // Step 2: Poll /index/status/:jobId every 800ms
+        const interval = setInterval(async () => {
+          try {
+            const statusRes = await fetch(`/index/status/${jobId}`);
+            const statusData = await statusRes.json();
+
+            if (statusData.state === 'failed') {
+              clearInterval(interval);
+              progressText.textContent = `❌ Indexing failed: ${statusData.failedReason || 'Unknown error'}`;
+              progressBar.style.background = '#d32f2f';
+              indexBtn.disabled = false;
+              return;
+            }
+
+            if (statusData.progress) {
+              const pct = statusData.progress.percent || 10;
+              progressBar.style.width = pct + '%';
+              progressText.textContent = `[${pct}%] ${statusData.progress.message || 'Processing...'}`;
+            }
+
+            if (statusData.state === 'completed') {
+              clearInterval(interval);
+              progressBar.style.width = '100%';
+              progressBar.style.background = '#388e3c';
+              progressText.textContent = `✅ Done! Indexed ${statusData.result?.filesIndexed || 0} files (${statusData.result?.chunksIndexed || 0} chunks). Ready for questions!`;
+              indexBtn.disabled = false;
+            }
+          } catch (pollErr) {
+            console.error('Polling error:', pollErr);
+          }
+        }, 800);
+
+      } catch (err) {
+        indexStatusEl.textContent = 'Could not reach API. Is server running?';
+        indexBtn.disabled = false;
+      }
+    });
+ </script>
 </body>
 </html>

@@ -1,0 +1,40 @@
+name: CodeLens CI
+
+# 1. Triggers: Run on every push or pull request to the main branch
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Clone your repository into the GitHub cloud VM
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Step 2: Install Node.js 22
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      # Step 3: Install dependencies cleanly from package-lock.json
+      - name: Install Dependencies
+        run: npm ci
+
+      # Step 4: Strict TypeScript typechecking
+      - name: Run TypeScript Typecheck
+        run: npm run typecheck
+
+      # Step 5: Run Automated Unit Tests
+      - name: Run Unit Tests
+        run: npm test
+
+      # Step 6: Verify Production Docker Image Builds
+      - name: Test Docker Container Build
+        run: docker build -t codelens:ci .
