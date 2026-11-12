@@ -39,6 +39,13 @@
   <hr style="margin: 28px 0; border: none; border-top: 1px solid #ddd;" />
 
   <h2 style="font-size: 1.1rem;">Ask a question</h2>
+  <!-- the dropdown -->
+    <div style="margin-bottom: 12px;">
+    <label for="repoSelect" style="font-weight: 600; font-size: 13px; color: #333;">Target Repository:</label>
+    <select id="repoSelect" style="width: 100%; padding: 8px; margin-top: 4px; font-size: 14px; border-radius: 6px; border: 1px solid #ccc; background: #fff;">
+      <option value="">All Indexed Repositories</option>
+    </select>
+  </div>
   <!-- id= lets JavaScript find this element later -->
   <textarea id="question" placeholder="e.g. how does this library escape regex special characters?"></textarea>
   <br />
@@ -52,6 +59,32 @@
   <script>
     // ===== 1. Grab the HTML elements by id =====
     const questionEl = document.getElementById('question'); //The getElementById() method of the Document interface returns an Element object representing the element whose id property matches the specified string
+        const repoSelectEl = document.getElementById('repoSelect');
+
+    // Fetch and populate the repository dropdown
+    async function loadRepositories() {
+      try {
+        const res = await fetch('/repos');
+        const data = await res.json();
+        if (data.ok && data.repositories) {
+          const currentVal = repoSelectEl.value;
+          repoSelectEl.innerHTML = '<option value="">All Indexed Repositories</option>';
+          data.repositories.forEach((r) => {
+            const opt = document.createElement('option');
+            opt.value = r.id;
+            opt.textContent = `${r.full_name} (${r.chunk_count} chunks)`;
+            repoSelectEl.appendChild(opt);
+          });
+          if (currentVal) repoSelectEl.value = currentVal;
+        }
+      } catch (err) {
+        console.error('Failed to load repositories dropdown:', err);
+      }
+    }
+
+    // Call it immediately on page load
+    loadRepositories();
+
     const askBtn = document.getElementById('askBtn');
     const statusEl = document.getElementById('status');
     const answerEl = document.getElementById('answer');
@@ -83,7 +116,9 @@
         const res = await fetch('/ask', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question }),
+          body: JSON.stringify({ question,
+              repoId: repoSelectEl.value || undefined, // <--- SENDS SELECTED REPO
+           }),
         });
 
         // Turn response body into a JS object
@@ -134,7 +169,7 @@
           const div = document.createElement('div');
           div.className = 'citation';
           div.innerHTML =
-            `<div class="path">${c.path} (lines ${c.start_line}-${c.end_line})</div>` +
+            `<div class="path">${c.repo_name ? `<span style="color:#1976d2;">[${c.repo_name}]</span> ` : ''}${c.path} (lines ${c.start_line}-${c.end_line})</div>` +
             `<div>meaning: ${Number(c.meaning_score).toFixed(3)} | keyword: ${Number(c.keyword_score).toFixed(3)}</div>` +
             `<div class="preview">${c.preview || ''}</div>`;
           citationsEl.appendChild(div);
@@ -209,6 +244,7 @@
               progressBar.style.background = '#388e3c';
               progressText.textContent = `✅ Done! Indexed ${statusData.result?.filesIndexed || 0} files (${statusData.result?.chunksIndexed || 0} chunks). Ready for questions!`;
               indexBtn.disabled = false;
+               loadRepositories(); // <--- REFRESH DROPDOWN AUTOMATICALLY!
             }
           } catch (pollErr) {
             console.error('Polling error:', pollErr);

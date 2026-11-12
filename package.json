@@ -7,8 +7,11 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx src/test-chunker.ts",
+     "test:isolation": "tsx src/test-isolation.ts",
+    "eval": "tsx src/eval.ts",
     "db:check": "tsx src/check.ts",
-    "start": "tsx src/server.ts"
+    "start": "tsx src/server.ts",
+    "worker": "tsx src/worker.ts"
   },
   "keywords": [],
   "author": "",

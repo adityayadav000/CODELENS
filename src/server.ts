@@ -7,7 +7,7 @@ import { critiqueAnswer } from './critic.js';
 import { draftAnswerFromEvidence } from './answer.js';
 import { ingestRepoFromUrl } from './ingest-repo.js';
 import { ingestQueue } from './queue.js';
-import './worker.js'; // Starts the background worker inside our Node process
+import { sql } from './db.js';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -23,9 +23,41 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
+// Return all indexed repositories and their chunk counts
+app.get('/repos', async (_req, res) => {
+  try {
+    const repos = await sql`
+         SELECT
+      r.id,
+      r.full_name,
+      r.clone_url,
+      r.updated_at,
+      (
+        SELECT count(c.id) 
+        FROM code_chunks c
+        JOIN commits cm ON c.commit_id = cm.id
+        WHERE cm.repository_id = r.id
+        AND cm.id = (
+          SELECT id FROM commits 
+          WHERE repository_id = r.id 
+          ORDER BY created_at DESC 
+          LIMIT 1
+        )
+      ) AS chunk_count
+    FROM repositories r
+    ORDER BY r.updated_at DESC
+    `;
+    res.json({ ok: true, repositories: repos });
+  } catch (err) {
+    console.error('Failed to list repos:', err);
+    res.status(500).json({ error: 'Failed to retrieve repositories' });
+  }
+});
+
 app.post('/ask', async (req, res) => {
   try {
-    const question = req.body?.question;
+       const question = req.body?.question;
+    const repoId = req.body?.repoId ? String(req.body.repoId) : undefined; // <--- READ REPO ID
 
     if (typeof question !== 'string' || question.trim() === '') {
       res.status(400).json({
@@ -34,9 +66,13 @@ app.post('/ask', async (req, res) => {
       return;
     }
 
-    const rows = await searchChunks(question.trim());
+    // Pass repoId to searchChunks so it only searches that repo!
+    const rows = await searchChunks(question.trim(), repoId);
+
+    
 
     const citations = rows.map((row) => ({
+      repo_name: row.repo_name,
       path: row.path,
       start_line: row.start_line,
       end_line: row.end_line,

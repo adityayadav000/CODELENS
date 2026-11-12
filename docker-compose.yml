@@ -9,12 +9,13 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      -  postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U codelens -d codelens"]
       interval: 5s
       timeout: 5s
       retries: 10
+
   redis:
     image: redis:7-alpine
     container_name: codelens-redis
@@ -27,17 +28,41 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-  app:
+
+  # Microservice 1: The Express Web API (Producer)
+  api:
     build: .
-    container_name: codelens-app
+    container_name: codelens-api
+    command: ["npm", "run", "start"]
     ports:
       - "3000:3000"
     environment:
+      PORT: 3000
       DATABASE_URL: postgres://codelens:codelens_dev_password@postgres:5432/codelens
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      GROQ_API_KEY: ${GROQ_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
-       
+      redis:
+        condition: service_healthy
+
+  # Microservice 2: The BullMQ Background Worker (Consumer)
+  worker:
+    build: .
+    container_name: codelens-worker
+    command: ["npm", "run", "worker"]
+    environment:
+      DATABASE_URL: postgres://codelens:codelens_dev_password@postgres:5432/codelens
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   postgres_data:
-  redis_data:    
+  redis_data:
