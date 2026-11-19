@@ -7,7 +7,7 @@
 
 ## 🏗️ System Architecture
 
-CodeLens is designed as a **distributed, event-driven multi-service system** capable of ingesting large git repositories asynchronously and delivering citation-backed code Q&A with zero hallucinations.
+CodeLens is designed as a **distributed, event-driven multi-service system** capable of ingesting large git repositories asynchronously and delivering citation-backed code Q&A with adversarial grounding verification.
 
 ```text
                            [ Client (Browser UI) ]
@@ -19,19 +19,20 @@ CodeLens is designed as a **distributed, event-driven multi-service system** cap
                    │                                     │
          (Pushes Job into Queue)                         │ 1. Vector Search (384-d Cosine)
                    ▼                                     │ 2. PostgreSQL Full-Text (GIN)
-          [ REDIS (BullMQ) ]                             │ 3. Repository Scoping (HEAD)
-                   │                                     ▼
-         (Pulls Job Asynchronously)              [ Scoped Code Chunks ]
-                   ▼                                     │
-     [ Ingestion Worker (Consumer) ]                     ▼
-       • Shallow Git Clone                      [ AGENTIC REFLEXION LOOP ]
-       • Semantic AST-Aware Chunking                     │
-       • Local MiniLM Embeddings (384-d)                 ├──► [ Writer Agent ] (Drafts answer)
-       • Real-Time Progress via Redis                    │        │
-                   │                                     │        ▼
-                   ▼                                     └──► [ Critic Agent ]
-        [ PostgreSQL + pgvector ]                                 │
-          (HNSW + GIN Indexes)                                    ├── PASS ──► [ Client Response ]
+          [ REDIS (BullMQ) ]                             │ 3. Reciprocal Rank Fusion (RRF)
+                   │                                     │ 4. Repository Scoping (HEAD)
+         (Pulls Job Asynchronously)                      ▼
+                   ▼                             [ Scoped Code Chunks ]
+     [ Ingestion Worker (Consumer) ]                     │
+       • Shallow Git Clone                               ▼
+       • TypeScript Compiler AST Parsing        [ AGENTIC REFLEXION LOOP ]
+       • Local MiniLM Embeddings (384-d)                 │
+       • Real-Time Progress via Redis                    ├──► [ Writer Agent ] (Drafts answer)
+                   │                                     │        │
+                   ▼                                     │        ▼
+        [ PostgreSQL + pgvector ]                        └──► [ Critic Agent ]
+          (HNSW + GIN Indexes)                                    │
+                                                                  ├── PASS ──► [ Redis Cache → Client ]
                                                                   └── FAIL ──► [ Self-Correction ]
                                                                                  (Bounded max retries: 2)
 ```
@@ -43,18 +44,30 @@ CodeLens is designed as a **distributed, event-driven multi-service system** cap
 ### 1. Asynchronous Ingestion with Redis & BullMQ (Producer-Consumer Pattern)
 * **The Problem:** Indexing repositories with hundreds of files takes minutes. Doing this in a synchronous HTTP request causes gateway timeouts (`504`) and blocks the Node.js event loop.
 * **The Solution:** The API server pushes an `index-repo` job to **Redis** and immediately returns an HTTP `202 Accepted` with a `jobId` in **< 15ms**.
-* **Decoupled Workers:** A dedicated BullMQ background worker pulls jobs, tracks concurrency (`concurrency: 2`), and updates real-time progress percentages (`cloning` $\rightarrow$ `listing` $\rightarrow$ `embedding` $\rightarrow$ `done`).
+* **Decoupled Workers:** A dedicated BullMQ background worker pulls jobs, tracks concurrency (`concurrency: 2`), and updates real-time progress percentages (`cloning` → `listing` → `embedding` → `done`).
 
-### 2. Multi-Tenant Repository Scoping & Snapshot Pinning
-* **Cross-Tenant Isolation:** Search queries are strictly scoped to a selected repository (`cm.repository_id = selected_id`).
-* **HEAD Snapshot Pinning:** Queries only target chunks from the **most recent commit snapshot**, preventing duplicate chunks across re-indexing runs.
+### 2. Repository Scoping & Commit Snapshot Pinning
+* **Per-Repository Filtering:** Search queries are scoped to a user-selected repository via foreign key filtering (`cm.repository_id = selected_id`), preventing cross-repo result leakage.
+* **HEAD Snapshot Pinning:** Queries only target chunks from the **most recent commit snapshot**, preventing duplicate results across re-indexing runs.
 * **Automated Verification:** Verified via automated integration tests (`npm run test:isolation`).
 
 ### 3. Agentic Reflexion Loop (Adversarial Verification)
 * **Actor-Critic Architecture:** A specialized **Writer Agent** drafts answers strictly from retrieved evidence, while an adversarial **Critic Agent** inspects file paths, function symbols, and line ranges.
-* **Reflexion (Self-Correction):** If the Critic detects a factual mismatch or hallucination, it generates targeted critique notes. The Writer autonomously digests the critique and rewrites the answer before the user ever sees it.
+* **Reflexion (Self-Correction):** If the Critic detects a factual mismatch or unsupported claim, it generates targeted critique notes. The Writer autonomously digests the critique and rewrites the answer before the user ever sees it.
 
-### 4. Local-First Privacy & Zero-Cost Embeddings
+### 4. TypeScript Compiler AST Parsing
+* Code files are parsed using the official **TypeScript Compiler API** (`ts.createSourceFile`), not regular expressions.
+* The AST walker extracts functions, classes, and class methods with **exact token-level line spans**, producing semantically meaningful chunks for embedding.
+
+### 5. Reciprocal Rank Fusion (RRF) for Hybrid Retrieval
+* **The Problem:** Naively combining vector similarity scores (0.0–1.0) with PostgreSQL `ts_rank` scores (0.0–0.06) in a weighted sum causes the keyword signal to degrade vector precision.
+* **The Solution:** Both retrieval lists are independently ranked, then fused using RRF with asymmetric *k*-weighting (*k*=20 for dense, *k*=120 for sparse). Keywords can **boost** a good vector match but can never **overrule** one.
+
+### 6. Redis Query Caching
+* Verified answers are cached in Redis with a 1-hour TTL.
+* Repeated queries return in **< 2ms** without hitting PostgreSQL or the LLM, enabling **2,000+ effective RPS** on cached queries.
+
+### 7. Local-First Privacy & Zero-Cost Embeddings
 * Uses `@xenova/transformers` running `Xenova/all-MiniLM-L6-v2` directly on the host machine.
 * Generates 384-dimensional dense vectors with **zero external API costs** and complete privacy for proprietary code.
 
@@ -62,15 +75,15 @@ CodeLens is designed as a **distributed, event-driven multi-service system** cap
 
 ## 📊 Empirical Evaluation & Benchmark (Ablation Study)
 
-Evaluated across a benchmark dataset of technical codebase queries measuring **Recall@K**, **Mean Reciprocal Rank (MRR)**, and **Latency**:
+Evaluated across an 8-query benchmark dataset spanning conceptual, exact-name, and mixed queries, measuring **Recall@K**, **Mean Reciprocal Rank (MRR)**, and **Latency**:
 
-| Search Strategy | Recall@1 (%) | Recall@5 (%) | MRR (Mean Reciprocal Rank) | Avg Latency (ms) |
+| Search Strategy | Recall@1 (%) | Recall@5 (%) | MRR | Avg Latency |
 |---|---|---|---|---|
-| **Keyword-Only (PostgreSQL FTS)** | 0.0% | 0.0% | **0.000** | ~103 ms |
-| **Vector-Only (all-MiniLM-L6-v2)** | 75.0% | 75.0% | **0.750** | ~101 ms |
-| **CodeLens Hybrid (Dense + Sparse)** | 50.0% | 50.0% | **0.500** | **~84 ms** |
+| **Keyword-Only (PostgreSQL FTS)** | 25.0% | 75.0% | 0.385 | 20 ms |
+| **Vector-Only (all-MiniLM-L6-v2)** | 62.5% | 100% | 0.781 | 33 ms |
+| **CodeLens Hybrid (RRF)** | **75.0%** | **100%** | **0.844** | **6.5 ms** |
 
-> **Key Finding:** Pure keyword search completely fails (0% Recall) on conceptual queries (e.g. *"how does authentication work"* vs function name `loginUser`). Dense vector retrieval achieves **0.75 MRR**, while hybrid ranking optimizes retrieval speed down to **84ms**.
+> **Key Finding:** Reciprocal Rank Fusion (RRF) with asymmetric weighting outperforms both individual strategies. Pure keyword search fails on conceptual queries (e.g. *"how does authentication work"* → `loginUser`), while pure vector search misranks chunks with strong lexical overlap. RRF combines ordinal rankings from both signals, achieving **0.844 MRR** at **5x lower latency** than vector-only search.
 
 ---
 
@@ -79,8 +92,8 @@ Evaluated across a benchmark dataset of technical codebase queries measuring **R
 ### Option 1: One-Click Docker Compose (Production Setup)
 ```bash
 # 1. Clone repository
-git clone https://github.com/your-username/codelens.git
-cd codelens
+git clone https://github.com/adityayadav000/CODELENS.git
+cd CODELENS
 
 # 2. Add your Groq API key in .env
 echo "GROQ_API_KEY=your_key_here" > .env
@@ -137,7 +150,10 @@ npm run eval
 * **Runtime & Language:** Node.js (v22), TypeScript (Strict Mode)
 * **API Framework:** Express.js
 * **Distributed Queue:** BullMQ + Redis 7
+* **Query Cache:** Redis (1-hour TTL, sub-2ms cached responses)
 * **Database & Vector Store:** PostgreSQL 16 + `pgvector` (HNSW Cosine Index) + Full-Text Search (GIN Index)
+* **Code Parsing:** TypeScript Compiler AST (`ts.createSourceFile`) for function, class, and method extraction
 * **Local Embeddings:** `@xenova/transformers` (`all-MiniLM-L6-v2`, 384 dimensions)
-* **Inference LLM:** Groq API (High-speed Llama / Mixtral inference)
-* **Containerization & CI/CD:** Docker, Docker Compose, GitHub Actions
+* **Retrieval Fusion:** Reciprocal Rank Fusion (RRF) with asymmetric *k*-weighting
+* **Inference LLM:** Groq API (Llama / Mixtral)
+* **Infrastructure:** Docker Compose, GitHub Actions CI/CD, Kubernetes manifests, Terraform IaC

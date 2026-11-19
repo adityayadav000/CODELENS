@@ -7,7 +7,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx src/test-chunker.ts",
-     "test:isolation": "tsx src/test-isolation.ts",
+    "test:isolation": "tsx src/test-isolation.ts",
     "eval": "tsx src/eval.ts",
     "db:check": "tsx src/check.ts",
     "start": "tsx src/server.ts",
@@ -29,6 +29,6 @@
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.2",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^5.9.3"
   }
 }

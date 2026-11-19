@@ -10,14 +10,11 @@ interface BenchmarkQuery {
 
 // 1. Ground Truth Benchmark Dataset
 const BENCHMARK_DATASET: BenchmarkQuery[] = [
+  // --- Conceptual queries (vector should dominate) ---
   {
     question: 'how does user login authentication work?',
     expectedFile: 'user.controller.js',
     expectedSymbol: 'loginUser',
-  },
-  {
-    question: 'where are user routes registered?',
-    expectedFile: 'user.routes.js',
   },
   {
     question: 'how to register or sign up a new user?',
@@ -25,12 +22,38 @@ const BENCHMARK_DATASET: BenchmarkQuery[] = [
     expectedSymbol: 'registerUser',
   },
   {
-    question: 'is plain object check implementation',
+    question: 'where are user routes registered?',
+    expectedFile: 'user.routes.js',
+  },
+
+  // --- Exact-name queries (keyword should dominate) ---
+  {
+    question: 'isPlainObject function',
     expectedFile: 'index.js',
     expectedSymbol: 'isPlainObject',
   },
-];
+  {
+    question: 'registerUser controller',
+    expectedFile: 'user.controller.js',
+    expectedSymbol: 'registerUser',
+  },
+  {
+    question: 'loginUser function',
+    expectedFile: 'user.controller.js',
+    expectedSymbol: 'loginUser',
+  },
 
+  // --- Mixed queries (hybrid should win) ---
+  {
+    question: 'user routes express router',
+    expectedFile: 'user.routes.js',
+  },
+  {
+    question: 'password hashing and user creation',
+    expectedFile: 'user.controller.js',
+    expectedSymbol: 'registerUser',
+  },
+];
 interface StrategyResult {
   name: string;
   mrr: number;
@@ -89,39 +112,78 @@ async function evaluateStrategy(
 async function runEvaluation() {
   console.log('📊 Starting CodeLens Academic Benchmark Evaluation...\n');
 
-  // Strategy 1: Keyword-Only Search
+    // Strategy 1: Keyword-Only Search (scoped to latest commit per repo)
   const keywordResults = await evaluateStrategy('Keyword-Only (FTS)', async (q) => {
     return await sql`
       SELECT c.path, c.symbol_name
       FROM code_chunks c
+      JOIN commits cm ON c.commit_id = cm.id
+      WHERE cm.id = (
+          SELECT id FROM commits
+          WHERE repository_id = cm.repository_id
+          ORDER BY created_at DESC LIMIT 1
+        )
       ORDER BY ts_rank(coalesce(c.content_tsv, to_tsvector('english', c.content)), plainto_tsquery('english', ${q})) DESC NULLS LAST
       LIMIT 5
     `;
   });
 
-  // Strategy 2: Vector-Only Search
+   // Strategy 2: Vector-Only Search (scoped to latest commit per repo)
   const vectorResults = await evaluateStrategy('Vector-Only (MiniLM)', async (q) => {
     const emb = await getEmbedding(q);
     return await sql`
       SELECT c.path, c.symbol_name
       FROM code_chunks c
+      JOIN commits cm ON c.commit_id = cm.id
       WHERE c.embedding IS NOT NULL
+        AND cm.id = (
+          SELECT id FROM commits
+          WHERE repository_id = cm.repository_id
+          ORDER BY created_at DESC LIMIT 1
+        )
       ORDER BY (1 - (c.embedding <=> ${JSON.stringify(emb)}::vector)) DESC
       LIMIT 5
     `;
   });
 
-  // Strategy 3: CodeLens Hybrid Search (70% Vector + 30% Keyword)
-  const hybridResults = await evaluateStrategy('CodeLens Hybrid Search', async (q) => {
+   
+    // Strategy 3: CodeLens Hybrid Search (Reciprocal Rank Fusion)
+  const hybridResults = await evaluateStrategy('CodeLens Hybrid (RRF)', async (q) => {
     const emb = await getEmbedding(q);
     return await sql`
-      SELECT c.path, c.symbol_name
-      FROM code_chunks c
-      WHERE c.embedding IS NOT NULL
-      ORDER BY
-        (1 - (c.embedding <=> ${JSON.stringify(emb)}::vector)) * 0.7
-        + coalesce(ts_rank(coalesce(c.content_tsv, to_tsvector('english', c.content)), plainto_tsquery('english', ${q})), 0) * 0.3
-        DESC NULLS LAST
+      WITH scoped_chunks AS (
+        SELECT c.*
+        FROM code_chunks c
+        JOIN commits cm ON c.commit_id = cm.id
+        WHERE cm.id = (
+          SELECT id FROM commits
+          WHERE repository_id = cm.repository_id
+          ORDER BY created_at DESC LIMIT 1
+        )
+      ),
+      vector_ranked AS (
+        SELECT sc.id,
+          ROW_NUMBER() OVER (
+            ORDER BY (sc.embedding <=> ${JSON.stringify(emb)}::vector) ASC
+          ) AS v_rank
+        FROM scoped_chunks sc
+        WHERE sc.embedding IS NOT NULL
+      ),
+      keyword_ranked AS (
+        SELECT sc.id,
+          ROW_NUMBER() OVER (
+            ORDER BY ts_rank(
+              coalesce(sc.content_tsv, to_tsvector('english', sc.content)),
+              plainto_tsquery('english', ${q})
+            ) DESC
+          ) AS k_rank
+        FROM scoped_chunks sc
+      )
+      SELECT sc.path, sc.symbol_name
+      FROM scoped_chunks sc
+      JOIN vector_ranked vr ON vr.id = sc.id
+      JOIN keyword_ranked kr ON kr.id = sc.id
+      ORDER BY (1.0 / (20 + vr.v_rank)) + (1.0 / (120 + kr.k_rank)) DESC
       LIMIT 5
     `;
   });

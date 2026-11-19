@@ -1,83 +1,121 @@
+import ts from 'typescript';
+
 export type CodeChunkPiece = {
   symbol_name: string | null;
-  kind: 'FUNCTION' | 'CLASS' | 'MODULE';
+  kind: 'FUNCTION' | 'METHOD' | 'CLASS' | 'MODULE';
   start_line: number;
   end_line: number;
   content: string;
 };
 
 /**
- * Split JS/TS source into function/class chunks (simple regex approach).
- * Not a full parser — good enough for demos. Falls back to whole file.
+ * Parses TypeScript/JavaScript code using the official TypeScript Compiler AST.
+ * Walks the syntax tree to extract top-level and exported functions, classes,
+ * methods, and arrow functions with exact token spans and line boundaries.
  */
-export function chunkSourceFile(source: string): CodeChunkPiece[] {
-  const lines = source.split('\n');
-  if (lines.length === 0) {
+export function chunkSourceFile(source: string, fileName = 'file.ts'): CodeChunkPiece[] {
+  if (!source || source.trim() === '') {
     return [];
   }
 
-  // Matches common patterns, e.g.:
-  // export default function name
-  // export function name
-  // function name
-  // export class Name
-  // class Name
-  // const name = ( or const name = function
-  const startRe =
-  /^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?(function\s+([A-Za-z0-9_]+)|class\s+([A-Za-z0-9_]+)|(?:const|let|var)\s+([A-Za-z0-9_]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)\s*=>|function\b))/;
-  const starts: { line: number; name: string; kind: 'FUNCTION' | 'CLASS' }[] =
-    [];
+  // 1. Create the AST SourceFile using the TypeScript compiler
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true // setParentNodes: allows navigating the syntax tree
+  );
 
-  for (let i = 0; i < lines.length; i++) {
-   const line = lines[i];
-if (!line) continue;
+  const pieces: CodeChunkPiece[] = [];
 
-const m = line.match(startRe);
-    if (!m) continue;
-
-    if (m[2]) {
-      starts.push({ line: i, name: m[2], kind: 'FUNCTION' });
-    } else if (m[3]) {
-      starts.push({ line: i, name: m[3], kind: 'CLASS' });
-    } else if (m[4]) {
-      starts.push({ line: i, name: m[4], kind: 'FUNCTION' });
-    }
+  // Helper function to extract 1-based start and end line numbers
+  function getNodeLineRange(node: ts.Node): { startLine: number; endLine: number } {
+    const start = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+    const end = sourceFile.getLineAndCharacterOfPosition(node.getEnd());
+    return {
+      startLine: start.line + 1,
+      endLine: end.line + 1,
+    };
   }
 
-  // Nothing found → one MODULE chunk (old behavior)
-  if (starts.length === 0) {
+  // Helper function to record a chunk piece
+  function addPiece(
+    name: string | null,
+    kind: 'FUNCTION' | 'METHOD' | 'CLASS',
+    node: ts.Node
+  ): void {
+    const range = getNodeLineRange(node);
+    pieces.push({
+      symbol_name: name,
+      kind: kind,
+      start_line: range.startLine,
+      end_line: range.endLine,
+      content: node.getText(sourceFile),
+    });
+  }
+
+  // 2. Recursive AST Visitor function
+  function visitNode(node: ts.Node): void {
+    // Case A: Standard Function Declaration (e.g., function calculateTotal() {})
+    if (ts.isFunctionDeclaration(node)) {
+      const name = node.name ? node.name.text : 'anonymous_function';
+      addPiece(name, 'FUNCTION', node);
+      return; // Do not traverse inside so the function remains a single chunk
+    }
+
+    // Case B: Class Declaration (e.g., class AuthService {})
+    if (ts.isClassDeclaration(node)) {
+      const className = node.name ? node.name.text : 'AnonymousClass';
+      addPiece(className, 'CLASS', node);
+
+      // Extract individual methods inside the class
+      for (let i = 0; i < node.members.length; i++) {
+        const member = node.members[i];
+        if (member && ts.isMethodDeclaration(member)) {
+          const methodName = member.name.getText(sourceFile);
+          addPiece(`${className}.${methodName}`, 'METHOD', member);
+        }
+      }
+      return;
+    }
+
+    // Case C: Variable Statement holding a function (e.g., const loginUser = async function(...) {})
+    if (ts.isVariableStatement(node)) {
+      const declarations = node.declarationList.declarations;
+      for (let i = 0; i < declarations.length; i++) {
+        const decl = declarations[i];
+        if (
+          decl &&
+          decl.initializer &&
+          (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer))
+        ) {
+          const name = decl.name.getText(sourceFile);
+          addPiece(name, 'FUNCTION', node);
+        }
+      }
+      return;
+    }
+
+    // Walk child nodes recursively
+    ts.forEachChild(node, visitNode);
+  }
+
+  // Walk the AST tree starting from the root
+  visitNode(sourceFile);
+
+  // Fallback: If no functions or classes were found, return the whole file as a MODULE chunk
+  if (pieces.length === 0) {
+    const lineCount = source.split('\n').length;
     return [
       {
         symbol_name: null,
         kind: 'MODULE',
         start_line: 1,
-        end_line: lines.length,
+        end_line: lineCount,
         content: source,
       },
     ];
   }
-
-  const pieces: CodeChunkPiece[] = [];
-
- for (let s = 0; s < starts.length; s++) {
-  const current = starts[s];
-  if (!current) continue;
-
-  const next = starts[s + 1];
-
-  const from = current.line;
-  const to = next ? next.line - 1 : lines.length - 1;
-
-  const slice = lines.slice(from, to + 1).join('\n');
-
-  pieces.push({
-    symbol_name: current.name,
-    kind: current.kind,
-    start_line: from + 1,
-    end_line: to + 1,
-    content: slice,
-  });
-}
 
   return pieces;
 }
