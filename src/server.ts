@@ -8,6 +8,11 @@ import { draftAnswerFromEvidence } from './answer.js';
 import { ingestRepoFromUrl } from './ingest-repo.js';
 import { ingestQueue } from './queue.js';
 import { sql } from './db.js';
+import { Redis } from 'ioredis';
+import { redisConnection } from './queue.js';
+
+// Dedicated Redis client for fast in-memory caching
+const redisCache = new Redis(redisConnection);
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -65,7 +70,18 @@ app.post('/ask', async (req, res) => {
       });
       return;
     }
-
+     // 1. Check Redis Cache first!
+    const cacheKey = `cache:ask:${repoId || 'all'}:${question.trim().toLowerCase()}`;
+    try {
+      const cached = await redisCache.get(cacheKey);
+      if (cached) {
+        console.log(`⚡ [Cache Hit] Returning instant answer from Redis for: "${question.trim()}"`);
+        res.json({ ...JSON.parse(cached), cached: true });
+        return;
+      }
+    } catch (cacheErr) {
+      console.warn('Cache read failed, falling back to search:', cacheErr);
+    }
     // Pass repoId to searchChunks so it only searches that repo!
     const rows = await searchChunks(question.trim(), repoId);
 
@@ -142,15 +158,26 @@ app.post('/ask', async (req, res) => {
       }
     }
 
-    console.log(`Sending verified response to client (Completed in ${attempts} attempts).`);
-    res.json({
+        console.log(`Sending verified response to client (Completed in ${attempts} attempts).`);
+    const responsePayload = {
       question,
       answer,
       citations,
       critic,
-      attempts, // 1 = first try passed, 2 = needed self-correction
-      history,  // Full audit trail of thoughts/critiques
-    });
+      attempts,
+      history,
+      cached: false,
+    };
+
+    // 2. Save into Redis with 1-hour expiration (3600 seconds)
+    try {
+      await redisCache.set(cacheKey, JSON.stringify(responsePayload), 'EX', 3600);
+      console.log(`💾 [Cache Stored] Saved answer to Redis for: "${question.trim()}"`);
+    } catch (cacheErr) {
+      console.warn('Failed to save to Redis cache:', cacheErr);
+    }
+
+    res.json(responsePayload);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong while answering.' });

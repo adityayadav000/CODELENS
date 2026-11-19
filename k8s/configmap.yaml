@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: codelens-config
+data:
+  PORT: "3000"
+  REDIS_HOST: "codelens-redis-service"
+  REDIS_PORT: "6379"
+  DATABASE_HOST: "codelens-postgres-service"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "codelens"
+  DATABASE_USER: "codelens"

@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: codelens-api
+  labels:
+    app: codelens-api
+spec:
+  replicas: 2   # Run 2 copies for high availability!
+  selector:
+    matchLabels:
+      app: codelens-api
+  template:
+    metadata:
+      labels:
+        app: codelens-api
+    spec:
+      containers:
+        - name: api
+          image: codelens:latest
+          command: ["npm", "run", "start"]
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: codelens-config
+            - secretRef:
+                name: codelens-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: codelens-api-service
+spec:
+  type: LoadBalancer   # Allows public user traffic into port 3000!
+  selector:
+    app: codelens-api
+  ports:
+    - port: 3000
+      targetPort: 3000

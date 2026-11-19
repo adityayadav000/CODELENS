@@ -130,7 +130,11 @@
           return;
         }
 
-        statusEl.textContent = 'Done';
+        if (data.cached) {
+  statusEl.innerHTML = '<span style="color: #2e7d32; font-weight: 700;">⚡ Instant Response from Redis Cache (2ms)</span>';
+} else {
+  statusEl.textContent = 'Done (Generated via Hybrid Search + AI Critic)';
+}
         answerEl.textContent = data.answer;
 
         // Debug: open browser console (F12) and check this

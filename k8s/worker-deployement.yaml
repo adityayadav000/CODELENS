@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: codelens-worker
+  labels:
+    app: codelens-worker
+spec:
+  replicas: 2   # 2 background workers pulling jobs from Redis!
+  selector:
+    matchLabels:
+      app: codelens-worker
+  template:
+    metadata:
+      labels:
+        app: codelens-worker
+    spec:
+      containers:
+        - name: worker
+          image: codelens:latest
+          command: ["npm", "run", "worker"]
+          envFrom:
+            - configMapRef:
+                name: codelens-config
+            - secretRef:
+                name: codelens-secrets
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"      # More RAM for AI embedding computations!
+              cpu: "1000m"
