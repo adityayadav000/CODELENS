@@ -23,10 +23,13 @@ const CODE_EXT = new Set(['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs']);
 export type ProgressCallback = (progress: IngestJobProgress) => Promise<void> | void;
 
 /** ".../is-plain-obj.git" → "is-plain-obj" */
-function repoNameFromUrl(url: string): string {
+// this updated part  will prevent same name collisions
+function repoNameFromUrl(url: string): { owner: string; name: string; folder: string } {
   const cleaned = url.replace(/\.git$/, '').replace(/\/$/, '');
   const parts = cleaned.split('/');
-  return parts[parts.length - 1] || 'repo';
+  const name = parts[parts.length - 1] || 'repo';
+  const owner = parts[parts.length - 2] || 'owner';
+  return { owner, name, folder: `${owner}_${name}` };
 }
 
 /**
@@ -90,9 +93,8 @@ export async function ingestRepoFromUrl(
     throw new Error('DATABASE_URL is missing. Add it to .env');
   }
 
-  const name = repoNameFromUrl(repoUrl);
-  const localRoot = path.join(process.cwd(), 'local-repos', name);
-
+    const { owner, name, folder } = repoNameFromUrl(repoUrl);
+  const localRoot = path.join(process.cwd(), 'local-repos', folder);
   console.log('Repo URL:', repoUrl);
   console.log('Local path:', localRoot);
 
@@ -152,6 +154,18 @@ export async function ingestRepoFromUrl(
 
   if (!repo) {
     throw new Error('Failed to insert repository');
+  }
+
+// Get REAL git commit SHA and message
+  let realSha = `sha-${Date.now()}`;
+  let realMessage = `Indexed ${owner}/${name}`;
+  try {
+    const { stdout: shaOut } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: localRoot });
+    realSha = shaOut.trim();
+    const { stdout: msgOut } = await execFileAsync('git', ['log', '-1', '--pretty=%B'], { cwd: localRoot });
+    realMessage = msgOut.trim().split('\n')[0] || realMessage;
+  } catch (err) {
+    console.warn('Could not read real git commit metadata, using fallback:', err);
   }
 
   // ----- commits row = one indexed snapshot -----
@@ -238,7 +252,6 @@ export async function ingestRepoFromUrl(
           start_line,
           end_line,
           content,
-          content_tsv,
           content_hash,
           embedding
         ) VALUES (
@@ -255,7 +268,6 @@ export async function ingestRepoFromUrl(
         )
         ON CONFLICT (commit_id, path, kind, start_line, end_line) DO UPDATE SET
           content = EXCLUDED.content,
-          content_tsv = EXCLUDED.content_tsv,
           content_hash = EXCLUDED.content_hash,
           symbol_name = EXCLUDED.symbol_name,
           embedding = EXCLUDED.embedding
