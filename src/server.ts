@@ -169,12 +169,16 @@ app.post('/ask', async (req, res) => {
       cached: false,
     };
 
-    // 2. Save into Redis with 1-hour expiration (3600 seconds)
-    try {
-      await redisCache.set(cacheKey, JSON.stringify(responsePayload), 'EX', 3600);
-      console.log(`💾 [Cache Stored] Saved answer to Redis for: "${question.trim()}"`);
-    } catch (cacheErr) {
-      console.warn('Failed to save to Redis cache:', cacheErr);
+        // 2. ONLY cache verified answers (never cache critic rejections or hallucinations!)
+    if (critic.pass) {
+      try {
+        await redisCache.set(cacheKey, JSON.stringify(responsePayload), 'EX', 3600);
+        console.log(`💾 [Cache Stored] Saved verified answer to Redis for: "${question.trim()}"`);
+      } catch (cacheErr) {
+        console.warn('Failed to save to Redis cache:', cacheErr);
+      }
+    } else {
+      console.warn(`⚠️ [Cache Skipped] Did not cache unverified answer for: "${question.trim()}"`);
     }
 
     res.json(responsePayload);
@@ -187,13 +191,20 @@ app.post('/ask', async (req, res) => {
 // 1. PRODUCER: Queue a new repo ingestion job
 app.post('/index', async (req, res) => {
   try {
-    const url = req.body?.url;
-    if (typeof url !== 'string' || !url.includes('github.com')) {
+       const rawUrl = req.body?.url;
+    let validUrl: URL;
+    try {
+      validUrl = new URL(String(rawUrl));
+      if (validUrl.hostname !== 'github.com') {
+        throw new Error('Only github.com is supported');
+      }
+    } catch {
       res.status(400).json({
-        error: 'Send JSON: { "url": "https://github.com/..." }',
+        error: 'Invalid URL. Must be a valid "https://github.com/owner/repo" URL.',
       });
       return;
     }
+    const url = validUrl.toString();
 
     // Push job to Redis queue (takes ~5 milliseconds!)
     const job = await ingestQueue.add('index-repo', {

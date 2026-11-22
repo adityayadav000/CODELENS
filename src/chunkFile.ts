@@ -9,21 +9,24 @@ export type CodeChunkPiece = {
 };
 
 /**
- * Parses TypeScript/JavaScript code using the official TypeScript Compiler AST.
- * Walks the syntax tree to extract top-level and exported functions, classes,
- * methods, and arrow functions with exact token spans and line boundaries.
+ * Parses TypeScript/JavaScript/JSX code using the official TypeScript Compiler AST.
+ * Walks the syntax tree to extract functions, classes, methods, CommonJS exports,
+ * and Express route registrations with exact line boundaries.
  */
 export function chunkSourceFile(source: string, fileName = 'file.ts'): CodeChunkPiece[] {
   if (!source || source.trim() === '') {
     return [];
   }
 
-  // 1. Create the AST SourceFile using the TypeScript compiler
+  // Detect whether this is TSX/JSX so the compiler parses JSX tags instead of < comparison operators
+  const isTsx = fileName.endsWith('.tsx') || fileName.endsWith('.jsx');
+
   const sourceFile = ts.createSourceFile(
     fileName,
     source,
     ts.ScriptTarget.Latest,
-    true // setParentNodes: allows navigating the syntax tree
+    true, // setParentNodes: allows navigating the syntax tree
+    isTsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   );
 
   const pieces: CodeChunkPiece[] = [];
@@ -54,21 +57,20 @@ export function chunkSourceFile(source: string, fileName = 'file.ts'): CodeChunk
     });
   }
 
-  // 2. Recursive AST Visitor function
+  // Recursive AST Visitor function
   function visitNode(node: ts.Node): void {
-    // Case A: Standard Function Declaration (e.g., function calculateTotal() {})
+    // 1. Standard Function Declarations (e.g., function add() {})
     if (ts.isFunctionDeclaration(node)) {
       const name = node.name ? node.name.text : 'anonymous_function';
       addPiece(name, 'FUNCTION', node);
-      return; // Do not traverse inside so the function remains a single chunk
+      return;
     }
 
-    // Case B: Class Declaration (e.g., class AuthService {})
+    // 2. Class Declarations & Methods (e.g., class AuthService {})
     if (ts.isClassDeclaration(node)) {
       const className = node.name ? node.name.text : 'AnonymousClass';
       addPiece(className, 'CLASS', node);
 
-      // Extract individual methods inside the class
       for (let i = 0; i < node.members.length; i++) {
         const member = node.members[i];
         if (member && ts.isMethodDeclaration(member)) {
@@ -79,7 +81,7 @@ export function chunkSourceFile(source: string, fileName = 'file.ts'): CodeChunk
       return;
     }
 
-    // Case C: Variable Statement holding a function (e.g., const loginUser = async function(...) {})
+    // 3. Variable Statements (e.g., const loginUser = async function(...) {})
     if (ts.isVariableStatement(node)) {
       const declarations = node.declarationList.declarations;
       for (let i = 0; i < declarations.length; i++) {
@@ -96,14 +98,55 @@ export function chunkSourceFile(source: string, fileName = 'file.ts'): CodeChunk
       return;
     }
 
-    // Walk child nodes recursively
+    // 4. CommonJS Exports (e.g., exports.loginUser = ... or module.exports.loginUser = ...)
+    if (ts.isExpressionStatement(node) && ts.isBinaryExpression(node.expression)) {
+      const binary = node.expression;
+      if (
+        binary.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isPropertyAccessExpression(binary.left)
+      ) {
+        const propAccess = binary.left;
+        const propName = propAccess.name.text;
+        const target = propAccess.expression.getText(sourceFile);
+
+        if (target === 'exports' || target === 'module.exports') {
+          if (
+            ts.isArrowFunction(binary.right) ||
+            ts.isFunctionExpression(binary.right)
+          ) {
+            addPiece(propName, 'FUNCTION', node);
+            return;
+          }
+        }
+      }
+    }
+
+    // 5. Express Route Registrations (e.g., router.post('/login', ...) or app.get('/users', ...))
+    if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)) {
+      const call = node.expression;
+      if (ts.isPropertyAccessExpression(call.expression)) {
+        const caller = call.expression.expression.getText(sourceFile);
+        const method = call.expression.name.text;
+        const httpMethods = ['get', 'post', 'put', 'delete', 'patch', 'use'];
+
+        if ((caller === 'router' || caller === 'app') && httpMethods.includes(method.toLowerCase())) {
+          const firstArg = call.arguments[0];
+          let routePath = '';
+          if (firstArg && ts.isStringLiteral(firstArg)) {
+            routePath = firstArg.text;
+          }
+          addPiece(`${caller}.${method}(${routePath})`, 'FUNCTION', node);
+          return;
+        }
+      }
+    }
+
     ts.forEachChild(node, visitNode);
   }
 
-  // Walk the AST tree starting from the root
   visitNode(sourceFile);
 
-  // Fallback: If no functions or classes were found, return the whole file as a MODULE chunk
+  // Fallback: If no functions, classes, or routes were found, return whole file as MODULE
   if (pieces.length === 0) {
     const lineCount = source.split('\n').length;
     return [

@@ -218,7 +218,7 @@ export async function ingestRepoFromUrl(
     });
 
     const content = await readFile(fullPath, 'utf8');
-    const pieces = chunkSourceFile(content);
+    const pieces = chunkSourceFile(content,rel);// Passes filename so TSX/JSX parses properly!
 
     for (const piece of pieces) {
       totalChunks++;

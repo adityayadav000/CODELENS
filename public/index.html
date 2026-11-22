@@ -168,14 +168,25 @@
           criticBox.innerText = 'Critic: (not in API response)';
         }
 
-        citationsEl.innerHTML = '';
+              citationsEl.innerHTML = '';
         for (const c of data.citations || []) {
           const div = document.createElement('div');
           div.className = 'citation';
-          div.innerHTML =
-            `<div class="path">${c.repo_name ? `<span style="color:#1976d2;">[${c.repo_name}]</span> ` : ''}${c.path} (lines ${c.start_line}-${c.end_line})</div>` +
-            `<div>meaning: ${Number(c.meaning_score).toFixed(3)} | keyword: ${Number(c.keyword_score).toFixed(3)}</div>` +
-            `<div class="preview">${c.preview || ''}</div>`;
+
+          const pathEl = document.createElement('div');
+          pathEl.className = 'path';
+          pathEl.textContent = `${c.repo_name ? `[${c.repo_name}] ` : ''}${c.path} (lines ${c.start_line}-${c.end_line})`;
+
+          const scoresEl = document.createElement('div');
+          scoresEl.textContent = `meaning: ${Number(c.meaning_score).toFixed(3)} | keyword: ${Number(c.keyword_score).toFixed(3)}`;
+
+          const previewEl = document.createElement('pre');
+          previewEl.className = 'preview';
+          previewEl.textContent = c.preview || ''; // textContent safely escapes raw code!
+
+          div.appendChild(pathEl);
+          div.appendChild(scoresEl);
+          div.appendChild(previewEl);
           citationsEl.appendChild(div);
         }
       } catch (err) {

@@ -57,19 +57,19 @@ CodeLens is designed as a **distributed, event-driven multi-service system** cap
 
 ### 4. TypeScript Compiler AST Parsing
 * Code files are parsed using the official **TypeScript Compiler API** (`ts.createSourceFile`), not regular expressions.
-* The AST walker extracts functions, classes, and class methods with **exact token-level line spans**, producing semantically meaningful chunks for embedding.
+* The AST walker extracts functions, classes, class methods, CommonJS exports (`exports.fn`), and Express route definitions (`router.post`) with **exact token-level line spans** across TypeScript, JavaScript, and TSX/JSX.
 
 ### 5. Reciprocal Rank Fusion (RRF) for Hybrid Retrieval
 * **The Problem:** Naively combining vector similarity scores (0.0–1.0) with PostgreSQL `ts_rank` scores (0.0–0.06) in a weighted sum causes the keyword signal to degrade vector precision.
 * **The Solution:** Both retrieval lists are independently ranked, then fused using RRF with asymmetric *k*-weighting (*k*=20 for dense, *k*=120 for sparse). Keywords can **boost** a good vector match but can never **overrule** one.
 
-### 6. Redis Query Caching
+### 6. Verified Redis Query Caching
 * Verified answers are cached in Redis with a 1-hour TTL.
-* Repeated queries return in **< 2ms** without hitting PostgreSQL or the LLM, enabling **2,000+ effective RPS** on cached queries.
+* Repeated queries return in sub-millisecond in-memory lookups (< 2ms) without hitting PostgreSQL or the LLM. Only Critic-verified answers are stored.
 
-### 7. Local-First Privacy & Zero-Cost Embeddings
+### 7. Local-First Zero-Cost Embeddings
 * Uses `@xenova/transformers` running `Xenova/all-MiniLM-L6-v2` directly on the host machine.
-* Generates 384-dimensional dense vectors with **zero external API costs** and complete privacy for proprietary code.
+* Generates 384-dimensional dense vectors locally on-device with **zero external embedding API costs**.
 
 ---
 
@@ -81,9 +81,9 @@ Evaluated across an 8-query benchmark dataset spanning conceptual, exact-name, a
 |---|---|---|---|---|
 | **Keyword-Only (PostgreSQL FTS)** | 25.0% | 75.0% | 0.385 | 20 ms |
 | **Vector-Only (all-MiniLM-L6-v2)** | 62.5% | 100% | 0.781 | 33 ms |
-| **CodeLens Hybrid (RRF)** | **75.0%** | **100%** | **0.844** | **6.5 ms** |
+| **CodeLens Hybrid (RRF)** | **75.0%** | **100%** | **0.844** | **~7–20 ms** |
 
-> **Key Finding:** Reciprocal Rank Fusion (RRF) with asymmetric weighting outperforms both individual strategies. Pure keyword search fails on conceptual queries (e.g. *"how does authentication work"* → `loginUser`), while pure vector search misranks chunks with strong lexical overlap. RRF combines ordinal rankings from both signals, achieving **0.844 MRR** at **5x lower latency** than vector-only search.
+> **Key Finding:** Reciprocal Rank Fusion (RRF) with asymmetric weighting outperforms both individual strategies. Pure keyword search fails on conceptual queries (e.g. *"how does authentication work"* → `loginUser`), while pure vector search misranks chunks with strong lexical overlap. RRF combines ordinal rankings from both signals, achieving **0.844 MRR** and **75% Recall@1**, matching vector retrieval speed while improving precision on exact-name and mixed queries.
 
 ---
 
@@ -133,10 +133,10 @@ npm run worker
 # Strict TypeScript compilation check
 npm run typecheck
 
-# Run unit tests (AST chunking logic)
+# Run unit tests (AST chunking logic across 5 real-world patterns)
 npm test
 
-# Run multi-repository isolation integration test
+# Run repository isolation integration test
 npm run test:isolation
 
 # Run empirical retrieval benchmark (MRR & Recall@K)
@@ -150,10 +150,10 @@ npm run eval
 * **Runtime & Language:** Node.js (v22), TypeScript (Strict Mode)
 * **API Framework:** Express.js
 * **Distributed Queue:** BullMQ + Redis 7
-* **Query Cache:** Redis (1-hour TTL, sub-2ms cached responses)
+* **Query Cache:** Redis (1-hour TTL, verified answers only)
 * **Database & Vector Store:** PostgreSQL 16 + `pgvector` (HNSW Cosine Index) + Full-Text Search (GIN Index)
-* **Code Parsing:** TypeScript Compiler AST (`ts.createSourceFile`) for function, class, and method extraction
+* **Code Parsing:** TypeScript Compiler AST (`ts.createSourceFile`) for function, class, method, route, and JSX extraction
 * **Local Embeddings:** `@xenova/transformers` (`all-MiniLM-L6-v2`, 384 dimensions)
 * **Retrieval Fusion:** Reciprocal Rank Fusion (RRF) with asymmetric *k*-weighting
-* **Inference LLM:** Groq API (Llama / Mixtral)
+* **Inference LLM:** Groq API (`openai/gpt-oss-20b`)
 * **Infrastructure:** Docker Compose, GitHub Actions CI/CD, Kubernetes manifests, Terraform IaC
