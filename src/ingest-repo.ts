@@ -18,7 +18,14 @@ const execFileAsync = promisify(execFile);
 const MAX_FILE_BYTES = 200_000;
 
 // Only these extensions are treated as source code
-const CODE_EXT = new Set(['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs']);
+const CODE_EXT = new Set([
+  '.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs',
+  '.py',
+  '.go',
+  '.java',
+  '.rs',
+  '.cpp', '.cc', '.cxx', '.c', '.hpp', '.h',
+]);
 
 export type ProgressCallback = (progress: IngestJobProgress) => Promise<void> | void;
 
@@ -232,7 +239,7 @@ export async function ingestRepoFromUrl(
     });
 
     const content = await readFile(fullPath, 'utf8');
-    const pieces = chunkSourceFile(content,rel);// Passes filename so TSX/JSX parses properly!
+    const pieces = await chunkSourceFile(content,rel);// Passes filename so TSX/JSX parses properly!
 
     for (const piece of pieces) {
       totalChunks++;

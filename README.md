@@ -55,9 +55,9 @@ CodeLens is designed as a **distributed, event-driven multi-service system** cap
 * **Actor-Critic Architecture:** A specialized **Writer Agent** drafts answers strictly from retrieved evidence, while an adversarial **Critic Agent** inspects file paths, function symbols, and line ranges.
 * **Reflexion (Self-Correction):** If the Critic detects a factual mismatch or unsupported claim, it generates targeted critique notes. The Writer autonomously digests the critique and rewrites the answer before the user ever sees it.
 
-### 4. TypeScript Compiler AST Parsing
-* Code files are parsed using the official **TypeScript Compiler API** (`ts.createSourceFile`), not regular expressions.
-* The AST walker extracts functions, classes, class methods, CommonJS exports (`exports.fn`), and Express route definitions (`router.post`) with **exact token-level line spans** across TypeScript, JavaScript, and TSX/JSX.
+ ### 4. Hybrid Polyglot AST Parsing (TypeScript + Tree-sitter WASM)
+* Replaces naive regex with a hybrid AST parsing architecture: uses the official **TypeScript Compiler API** (`ts.createSourceFile`) for TypeScript/JavaScript/TSX, and **Tree-sitter via WebAssembly** (`web-tree-sitter`) for Python, Go, Java, Rust, and C/C++.
+* Extracts functions, classes, struct methods, and route definitions across 6 major programming languages with **exact token-level line spans**—with zero C++ compiler dependencies.
 
 ### 5. Reciprocal Rank Fusion (RRF) for Hybrid Retrieval
 * **The Problem:** Naively combining vector similarity scores (0.0–1.0) with PostgreSQL `ts_rank` scores (0.0–0.06) in a weighted sum causes the keyword signal to degrade vector precision.
@@ -152,7 +152,7 @@ npm run eval
 * **Distributed Queue:** BullMQ + Redis 7
 * **Query Cache:** Redis (1-hour TTL, verified answers only)
 * **Database & Vector Store:** PostgreSQL 16 + `pgvector` (HNSW Cosine Index) + Full-Text Search (GIN Index)
-* **Code Parsing:** TypeScript Compiler AST (`ts.createSourceFile`) for function, class, method, route, and JSX extraction
+* **Code Parsing:** TypeScript Compiler AST (`ts.createSourceFile`) + Tree-sitter WebAssembly (`web-tree-sitter` for Python, Go, Java, Rust, C++)
 * **Local Embeddings:** `@xenova/transformers` (`all-MiniLM-L6-v2`, 384 dimensions)
 * **Retrieval Fusion:** Reciprocal Rank Fusion (RRF) with asymmetric *k*-weighting
 * **Inference LLM:** Groq API (`openai/gpt-oss-20b`)
